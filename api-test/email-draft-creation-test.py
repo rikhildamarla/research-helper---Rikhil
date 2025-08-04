@@ -4,6 +4,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import ssl
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 def create_gmail_draft():
     # Gmail IMAP settings
     IMAP_SERVER = "imap.gmail.com"
@@ -11,7 +16,7 @@ def create_gmail_draft():
     
     # Your credentials (use app password)
     EMAIL = "periodicstockpriceupdatebot@gmail.com"
-    PASSWORD = "dldx punl nzdf igzp"  # App password, not regular password
+    PASSWORD = os.getenv("EMAIL_APP_PW")  # App password, not regular password
 
     
     # Create the email message
