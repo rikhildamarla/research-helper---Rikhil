@@ -1,21 +1,41 @@
+You are helping draft a personalized academic outreach email to a professor. The email should be professional, specific, and genuinely interested in their research.
 
-Dear [title] [last_name]
+            PROFESSOR CONTEXT:
+            {prof_context}
 
-Hope this email finds you well.
+            SELECTED PAPER:
+            {paper_context}
 
-I had a quick question on your paper regarding [insert the subject of the paper relating to your research paper]:
- - [Insert the question here, make sure it relates to the project you want to do]
+            MY RESEARCH PROJECT:
+            "Can Financial Predictive Models Detect Early Signs of Gentrification Risk for Vulnerable Communities?"
 
-The reason I’m asking is because I’m working on a project in a similar vertical on [look at my resume to pick out the project I am working on that is similar]. 
+            EMAIL TEMPLATE TO FILL (USE EXACTLY THIS TEMPLATE):
+            Dear Professor [last_name],
 
-Attached is a project proposal that describes it in more detail. 
+            Hope this email finds you well.
+            I had a quick question on your paper regarding [insert the subject of the paper relating to my research on this topic: Can Financial Predictive Models Detect Early Signs of Gentrification Risk for Vulnerable Communities?]:
+             - [Write the question here, make sure it relates to the project mentioned earlier]
 
-I would also love to have a quick chat to hear your thoughts on my project, as I am pretty early into my research journey and am looking for some direction.
+            The reason I'm asking is because I'm working on a project in a similar vertical on If Financial Predictive Models can Detect Gentrification Risk.
+            I would also love to have a quick chat to hear your thoughts on my project, as I am pretty early into my research journey and am looking for some direction.
 
-Would a 15 minute chat work for you sometime soon? If so, please feel free to book a time on my calendar here:
+            Would a 15 minute chat work for you sometime soon?
 
-Again, thank you for your time. Any response would mean a lot as I work toward pursuing my dream of contributing to this field.
+            Any response would mean a lot as I work toward pursuing my dream of contributing to this field. If you are unable to assist but know someone who might, I would greatly appreciate it if you could kindly redirect me to them.
+            (Resume attached to give a bit of background)
 
-Kind regards,
-Rikhil Damarla
-+1 925-694-2662
+            Kind regards,
+            Rikhil Damarla
+            +1 925-694-2662
+
+            TASK:
+            1. Fill in ONLY the bracketed placeholders in the template
+            2. Replace [last_name] with the professor's last name
+            3. Replace [insert the subject of the paper...] with a brief, specific description of how their paper relates to gentrification research
+            4. Replace [Write the question here...] with a thoughtful, specific question about their work that connects to gentrification modeling
+            5. Keep ALL other text exactly as written in the template
+            6. Make sure the connection between their work and gentrification research is clear and logical
+            7. The question should be genuine and demonstrate you've read/understood their work
+
+            Return ONLY the completed email text with the template filled in, no explanations or extra content.
+            

@@ -9,14 +9,19 @@ from dotenv import load_dotenv
 import os
 from typing import List, Dict, Optional
 
+import csv
+import os
+from pathlib import Path
+
 # Load environment variables
 load_dotenv()
 
 # CONFIGURATION VARIABLES
-FACULTY_PAGE_URL = "https://www.eecs.mit.edu/role/faculty-cs/"
+FACULTY_PAGE_URL = "https://www.cs.princeton.edu/people/faculty"
 FACULTY_LINKS_LIMIT = 5  # Maximum number of faculty to process
 REQUEST_DELAY = 2  # Seconds to wait between requests (be respectful)
 SCHOLAR_REQUEST_DELAY = 3  # Seconds to wait between Google Scholar requests
+LINK_ANALYSIS_LIMIT = 10  # Maximum number of profile links to analyze
 
 class IntegratedFacultyScraper:
     def __init__(self):
@@ -34,9 +39,15 @@ class IntegratedFacultyScraper:
         # SerpAPI key for Google Scholar
         self.serpapi_key = os.getenv("SERPAPI_API_KEY")
         
+        # Track visited URLs to prevent infinite recursion
+        self.visited_urls = set()
+        
     def get_page_content(self, url: str) -> Optional[BeautifulSoup]:
         """Fetch and parse a web page"""
         try:
+            # Add to visited URLs
+            self.visited_urls.add(url)
+            
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return BeautifulSoup(response.content, 'html.parser')
@@ -284,6 +295,256 @@ class IntegratedFacultyScraper:
             print(f"   ❌ AI analysis error: {e}")
             return []
     
+    def find_relevant_faculty_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Use AI to identify relevant faculty profile links from the page"""
+        print("🔗 Analyzing page links to find faculty profiles...")
+        
+        # Extract all links from the page
+        all_links = []
+        for link in soup.find_all('a', href=True):
+            href = link.get('href')
+            if not href:
+                continue
+            
+            # Convert relative URLs to absolute
+            if not href.startswith('http'):
+                href = urljoin(base_url, href)
+            
+            # Skip already visited URLs
+            if href in self.visited_urls:
+                continue
+            
+            # Get link text and context
+            link_text = link.get_text().strip()
+            
+            # Get some surrounding context
+            parent = link.parent
+            context = parent.get_text().strip()[:200] if parent else ""
+            
+            all_links.append({
+                'url': href,
+                'text': link_text,
+                'context': context
+            })
+        
+        if not all_links:
+            print("   No links found on page")
+            return []
+        
+        print(f"   Found {len(all_links)} total links")
+        
+        # Use AI to filter for faculty profile links
+        try:
+            # Prepare links data for AI analysis (limit to avoid token limits)
+            links_sample = all_links[:50]  # Analyze first 50 links
+            links_text = ""
+            for i, link in enumerate(links_sample):
+                links_text += f"\n{i+1}. URL: {link['url']}\n"
+                links_text += f"   Text: {link['text']}\n"
+                links_text += f"   Context: {link['context'][:100]}...\n"
+            
+            prompt = f"""
+            You are analyzing links from a faculty directory page to identify which ones lead to individual faculty profiles.
+
+            LINKS FROM PAGE:
+            {links_text}
+
+            Your task: Identify which URLs are most likely to be individual faculty member profiles.
+
+            Return ONLY a JSON array of the most relevant URLs (maximum 10):
+            [
+                "https://example.edu/faculty/professor-name",
+                "https://example.edu/people/john-smith",
+                ...
+            ]
+
+            LOOK FOR:
+            - Links with professor names (John Smith, Maria Garcia, etc.)
+            - URLs containing patterns like /faculty/, /people/, /profiles/, /staff/
+            - Link text that looks like person names
+            - Context mentioning titles like "Professor", "Dr.", "PhD"
+
+            AVOID:
+            - Generic links (About, Contact, Home, etc.)
+            - Administrative links
+            - External links to other domains
+            - Course or curriculum links
+            - News or event links
+            - Social media links
+
+            Return ONLY the URL strings, no explanations.
+            """
+            
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=800,
+                temperature=0.1
+            )
+            
+            try:
+                relevant_urls = json.loads(response.choices[0].message.content)
+                
+                # Validate URLs
+                valid_urls = []
+                for url in relevant_urls:
+                    if isinstance(url, str) and url.startswith('http') and url not in self.visited_urls:
+                        valid_urls.append(url)
+                
+                print(f"   AI identified {len(valid_urls)} relevant faculty profile links")
+                return valid_urls[:LINK_ANALYSIS_LIMIT]
+                
+            except json.JSONDecodeError as e:
+                print(f"   ❌ AI returned invalid JSON for link analysis: {e}")
+                return []
+                
+        except Exception as e:
+            print(f"   ❌ AI link analysis error: {e}")
+            return []
+    
+    def extract_faculty_info_from_profile(self, profile_url: str) -> Optional[Dict]:
+        """Extract faculty information from an individual profile page"""
+        print(f"   📄 Analyzing profile: {profile_url}")
+        
+        soup = self.get_page_content(profile_url)
+        if not soup:
+            return None
+        
+        page_text = soup.get_text()
+        clean_page_text = re.sub(r'\s+', ' ', page_text).strip()
+        
+        # Use AI to extract faculty information from the profile page
+        try:
+            # Limit page text for AI processing
+            if len(clean_page_text) > 8000:
+                clean_page_text = clean_page_text[:8000] + "..."
+            
+            prompt = f"""
+            You are analyzing an individual faculty member's profile page to extract their information.
+
+            PROFILE PAGE TEXT:
+            "{clean_page_text}"
+
+            Extract the following information and return as JSON:
+            {{
+                "name": "Full Name of Professor",
+                "email": "email@university.edu (if found)",
+                "title": "Professor/Associate Professor/Assistant Professor title",
+                "department": "Department name",
+                "research_interests": ["list", "of", "research", "areas"],
+                "confidence": "high|medium|low"
+            }}
+
+            RULES:
+            1. Look for a clear person's name (First Last format)
+            2. Find their email address if present (look for @university.edu pattern)
+            3. Identify their academic title/position
+            4. Extract research interests or specializations
+            5. If you can't find clear information, set confidence to "low"
+            6. If this doesn't appear to be a faculty profile, return null for name
+
+            Focus on accuracy - only extract clear, identifiable information.
+            """
+            
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.1
+            )
+            
+            try:
+                result = json.loads(response.choices[0].message.content)
+                
+                # Validate the extracted information
+                name = result.get('name', '').strip()
+                email = result.get('email', '').strip()
+                
+                if not name or not self.is_valid_professor_name(name):
+                    print(f"      ❌ Invalid or missing name: {name}")
+                    return None
+                
+                # If no email found, try to construct one
+                if not email or email == "email@university.edu (if found)":
+                    domain = urlparse(profile_url).netloc
+                    if domain.startswith('www.'):
+                        domain = domain[4:]
+                    
+                    name_parts = name.lower().split()
+                    if len(name_parts) >= 2:
+                        first_name = name_parts[0]
+                        last_name = name_parts[-1]
+                        email = f"{first_name}.{last_name}@{domain}"
+                        result['email'] = email
+                        result['email_constructed'] = True
+                
+                result['profile_url'] = profile_url
+                result['source'] = 'individual_profile_analysis'
+                
+                print(f"      ✅ Extracted: {name} ({email})")
+                return result
+                
+            except json.JSONDecodeError as e:
+                print(f"      ❌ AI returned invalid JSON: {e}")
+                return None
+                
+        except Exception as e:
+            print(f"      ❌ Profile analysis error: {e}")
+            return None
+    
+    def scrape_faculty_from_links(self, faculty_page_url: str) -> List[Dict]:
+        """Fallback method: scrape faculty info by analyzing individual profile links"""
+        print(f"\n🔄 FALLBACK: Link Analysis Approach")
+        print(f"Analyzing embedded links for faculty profiles...")
+        
+        # Get the main faculty page
+        soup = self.get_page_content(faculty_page_url)
+        if not soup:
+            return []
+        
+        # Find relevant faculty profile links
+        faculty_links = self.find_relevant_faculty_links(soup, faculty_page_url)
+        
+        if not faculty_links:
+            print("❌ No relevant faculty profile links found")
+            return []
+        
+        print(f"📋 Processing {len(faculty_links)} faculty profile links...")
+        
+        faculty_data = []
+        
+        for i, profile_url in enumerate(faculty_links):
+            if len(faculty_data) >= FACULTY_LINKS_LIMIT:
+                print(f"   Reached limit of {FACULTY_LINKS_LIMIT} profiles")
+                break
+            
+            print(f"   Processing {i+1}/{len(faculty_links)}: {profile_url}")
+            
+            # Extract faculty info from individual profile
+            faculty_info = self.extract_faculty_info_from_profile(profile_url)
+            
+            if faculty_info:
+                faculty_data.append({
+                    'name': faculty_info['name'],
+                    'email': faculty_info['email'],
+                    'title': faculty_info.get('title', ''),
+                    'department': faculty_info.get('department', ''),
+                    'profile_url': faculty_info['profile_url'],
+                    'research_interests': faculty_info.get('research_interests', []),
+                    'source': 'link_analysis_fallback',
+                    'confidence': faculty_info.get('confidence', 'medium'),
+                    'email_constructed': faculty_info.get('email_constructed', False)
+                })
+                print(f"      ✅ Added to results")
+            else:
+                print(f"      ❌ Could not extract valid faculty info")
+            
+            # Respectful delay
+            time.sleep(REQUEST_DELAY)
+        
+        print(f"📊 Link analysis found {len(faculty_data)} faculty members")
+        return faculty_data
+    
     def is_valid_professor_name(self, name: str) -> bool:
         """Validate that a name looks like a real professor's name"""
         if not name or len(name) < 3:
@@ -466,23 +727,34 @@ class IntegratedFacultyScraper:
             }
     
     def scrape_complete_faculty_data(self, faculty_page_url: str) -> List[Dict]:
-        """Main function to scrape complete faculty data using DIRECT EMAIL APPROACH"""
+        """Main function to scrape complete faculty data using DIRECT EMAIL APPROACH with link analysis fallback"""
         print(f"🎯 DIRECT EMAIL APPROACH: Find all .edu emails + names on faculty page")
         print(f"Scraping faculty page: {faculty_page_url}")
         print(f"Settings: LIMIT={FACULTY_LINKS_LIMIT}, DELAY={REQUEST_DELAY}s, SCHOLAR_DELAY={SCHOLAR_REQUEST_DELAY}s")
         
-        # Get the faculty directory page
+        # Clear visited URLs for this scraping session
+        self.visited_urls.clear()
+        
+        # STEP 1: Try original direct email extraction approach (UNCHANGED)
+        print(f"\n📧 STEP 1: Direct Email Extraction Approach (Original Logic)")
         soup = self.get_page_content(faculty_page_url)
         if not soup:
             return []
         
-        # Find all faculty emails and names directly from the page
+        # Find all faculty emails and names directly from the page (ORIGINAL METHOD)
         faculty_data = self.find_all_faculty_emails_and_names(soup, faculty_page_url)
         print(f"\n📧 Found {len(faculty_data)} faculty with email+name pairs")
         
+        # STEP 2: If no results, try link analysis fallback
+        if len(faculty_data) == 0:
+            print(f"\n🔄 STEP 2: Link Analysis Fallback (no direct emails found)")
+            faculty_data = self.scrape_faculty_from_links(faculty_page_url)
+        
         if not faculty_data:
-            print("❌ No faculty emails found on the page")
+            print("❌ No faculty data found with either approach")
             return []
+        
+        print(f"\n📊 Processing {len(faculty_data)} faculty members for papers and research summaries...")
         
         professors = []
         
@@ -515,21 +787,24 @@ class IntegratedFacultyScraper:
             complete_prof_data = {
                 'name': faculty_info['name'],
                 'email': faculty_info['email'],
-                'title': '',  # Not extracted in this approach
-                'profile_url': faculty_info.get('profile_url', faculty_page_url),  # Source page
+                'title': faculty_info.get('title', ''),  # Not extracted in direct approach
+                'department': faculty_info.get('department', ''),
+                'profile_url': faculty_info.get('profile_url', faculty_page_url),  # Source page or individual profile
                 'research_summary': research_summary['research_summary'],
                 'research_keywords': research_summary['research_keywords'],
                 'research_areas': research_summary['research_areas'],
+                'research_interests': faculty_info.get('research_interests', []),
                 'top_papers': papers_result.get('papers', []),
                 'total_papers_found': papers_result.get('total_papers_found', 0),
                 'data_sources': {
-                    'basic_info': 'faculty_page_email_extraction',
+                    'basic_info': faculty_info.get('source', 'faculty_page_email_extraction'),
                     'papers': 'google_scholar_api',
                     'research_summary': 'ai_generated'
                 },
                 'scraping_notes': {
                     'extraction_method': faculty_info.get('source', 'direct_email_search'),
                     'confidence': faculty_info.get('confidence', 'unknown'),
+                    'email_constructed': faculty_info.get('email_constructed', False),
                     'papers_error': papers_result.get('error', None)
                 }
             }
@@ -548,64 +823,175 @@ class IntegratedFacultyScraper:
         return professors
 
 
+# Add this enhanced error handling around your AI JSON parsing
+
+def extract_faculty_from_emails_with_ai(self, content, emails):
+    """Enhanced version with better error handling"""
+    try:
+        # Your existing prompt construction code here...
+        
+        print(f"🤖 Sending request to AI with {len(emails)} emails...")
+        
+        response = self.client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a faculty data extraction expert..."},
+                {"role": "user", "content": your_prompt}
+            ],
+            temperature=0
+        )
+        
+        ai_response = response.choices[0].message.content.strip()
+        
+        # Enhanced debugging
+        print(f"📝 AI Response Length: {len(ai_response)} characters")
+        print(f"📝 AI Response Preview: {ai_response[:200]}...")
+        
+        # Check if response is empty
+        if not ai_response:
+            print("❌ AI returned empty response")
+            return []
+            
+        # Check if response looks like JSON
+        if not (ai_response.startswith('[') or ai_response.startswith('{')):
+            print(f"❌ AI response doesn't look like JSON: {ai_response[:100]}...")
+            return []
+        
+        # Try to parse JSON with better error handling
+        try:
+            faculty_data = json.loads(ai_response)
+        except json.JSONDecodeError as je:
+            print(f"❌ JSON Parse Error: {je}")
+            print(f"   Raw response: {ai_response}")
+            
+            # Try to extract JSON from response if it's wrapped in text
+            import re
+            json_match = re.search(r'(\[.*\]|\{.*\})', ai_response, re.DOTALL)
+            if json_match:
+                try:
+                    faculty_data = json.loads(json_match.group(1))
+                    print("✅ Successfully extracted JSON from wrapped response")
+                except:
+                    print("❌ Failed to parse extracted JSON")
+                    return []
+            else:
+                return []
+        
+        print(f"✅ Successfully parsed {len(faculty_data)} faculty records")
+        return faculty_data
+        
+    except Exception as e:
+        print(f"❌ Error in AI extraction: {e}")
+        print(f"   Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+# Enhanced main function with better error handling
 def main():
-    print(f"🎯 DIRECT EMAIL FACULTY SCRAPER CONFIGURATION:")
-    print(f"   Faculty URL: {FACULTY_PAGE_URL}")
-    print(f"   Faculty Limit: {FACULTY_LINKS_LIMIT}")
+    print(f"🎯 ENHANCED FACULTY SCRAPER - BATCH PROCESSING FROM CSV")
+    print(f"   CSV File: faculty-urls.csv")
+    print(f"   Output Folder: professor-info/")
+    print(f"   Faculty Limit per URL: {FACULTY_LINKS_LIMIT}")
     print(f"   Request Delay: {REQUEST_DELAY}s")
     print(f"   Scholar API Delay: {SCHOLAR_REQUEST_DELAY}s")
     print()
     
-    # Initialize scraper (API keys loaded from .env)
-    scraper = IntegratedFacultyScraper()
-    
-    # Check if required API keys are available
-    if not scraper.client.api_key:
-        print("❌ OPENAI_API_KEY not found in environment variables")
+    # Check if CSV file exists
+    csv_file = "faculty-urls.csv"
+    if not os.path.exists(csv_file):
+        print(f"❌ CSV file '{csv_file}' not found in current directory")
         return
     
-    if not scraper.serpapi_key:
-        print("❌ SERPAPI_API_KEY not found in environment variables")
-        print("   You can still scrape basic info, but won't get research papers")
+    # Create output directory
+    output_dir = Path("professor-info")
+    output_dir.mkdir(exist_ok=True)
     
-    # Scrape the faculty page
-    professors = scraper.scrape_complete_faculty_data(FACULTY_PAGE_URL)
+    # Read URLs from CSV
+    faculty_urls = []
+    try:
+        with open(csv_file, 'r', encoding='utf-8') as file:
+            csv_reader = csv.reader(file)
+            for row in csv_reader:
+                if row and row[0].strip():
+                    url = row[0].strip()
+                    if url.startswith('http'):
+                        faculty_urls.append(url)
+    except Exception as e:
+        print(f"❌ Error reading CSV file: {e}")
+        return
     
-    # Output results
-    output = {
-        "source_url": FACULTY_PAGE_URL,
-        "total_professors": len(professors),
-        "scraped_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "settings": {
-            "faculty_limit": FACULTY_LINKS_LIMIT,
-            "request_delay": REQUEST_DELAY,
-            "scholar_request_delay": SCHOLAR_REQUEST_DELAY
-        },
-        "data_sources": {
-            "basic_info": "Direct email extraction from faculty page",
-            "research_papers": "Google Scholar API (SerpAPI)",
-            "research_summary": "AI-generated from papers"
-        },
-        "professors": professors
-    }
+    if not faculty_urls:
+        print(f"❌ No valid URLs found in {csv_file}")
+        return
     
-    # Save to JSON file
-    with open('complete_professors.json', 'w', encoding='utf-8') as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
+    print(f"📋 Found {len(faculty_urls)} valid URLs to process")
     
-    print(f"\n✅ Successfully scraped {len(professors)} complete professor profiles")
-    print(f"📁 Results saved to complete_professors.json")
+    # Initialize scraper
+    scraper = IntegratedFacultyScraper()
     
-    # Print sample data
-    if professors:
-        print(f"\n📋 Sample professor data:")
-        sample = professors[0]
-        print(f"  Name: {sample['name']}")
-        print(f"  Email: {sample['email']}")
-        print(f"  Research Summary: {sample['research_summary'][:100]}..." if sample['research_summary'] else "  Research Summary: (none)")
-        print(f"  Research Keywords: {sample['research_keywords'][:5]}")
-        print(f"  Top Papers: {len(sample['top_papers'])} papers")
-        print(f"  Total Papers Found: {sample['total_papers_found']}")
+    # Process each URL with enhanced error handling
+    for i, faculty_url in enumerate(faculty_urls):
+        print(f"\n{'='*80}")
+        print(f"🌐 PROCESSING URL {i+1}/{len(faculty_urls)}: {faculty_url}")
+        print(f"{'='*80}")
+        
+        try:
+            # Add longer delay between requests in batch mode
+            if i > 0:
+                print(f"⏳ Waiting {REQUEST_DELAY * 3}s between universities...")
+                time.sleep(REQUEST_DELAY * 3)
+            
+            # Generate filename
+            from urllib.parse import urlparse
+            parsed_url = urlparse(faculty_url)
+            domain = parsed_url.netloc.replace('www.', '')
+            path = parsed_url.path.replace('/', '_').replace('-', '_')
+            if not path or path == '_':
+                path = 'faculty'
+            filename = f"{domain}{path}.json"
+            filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+            filepath = output_dir / filename
+            
+            print(f"📁 Output file: {filepath}")
+            
+            # Try scraping with timeout protection
+            professors = []
+            try:
+                professors = scraper.scrape_complete_faculty_data(faculty_url)
+            except Exception as scrape_error:
+                print(f"❌ Scraping error for {faculty_url}: {scrape_error}")
+                continue
+            
+            if professors:
+                # Create output data
+                output = {
+                    "source_url": faculty_url,
+                    "total_professors": len(professors),
+                    "scraped_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "scraping_approach": "Direct email extraction with link analysis fallback",
+                    "professors": professors
+                }
+                
+                # Save to JSON file
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(output, f, indent=2, ensure_ascii=False)
+                
+                print(f"✅ Successfully scraped {len(professors)} professors")
+                print(f"📁 Saved to: {filepath}")
+                
+                # Print sample
+                if professors:
+                    sample = professors[0]
+                    print(f"📋 Sample: {sample['name']} ({sample['email']})")
+            else:
+                print(f"❌ No professors found for {faculty_url}")
+                
+        except Exception as e:
+            print(f"❌ Critical error processing {faculty_url}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
 
 
 if __name__ == "__main__":

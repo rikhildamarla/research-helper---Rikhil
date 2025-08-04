@@ -1,1 +1,37 @@
 .env
+Rikhil Damarla-RESUME.pdf
+email-template.txt
+api-test/
+prior-versions/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+*.env
+
+# VSCode or IDE-specific
+.vscode/
+.idea/
+
+# Credentials and environment
+.env
+*.key
+*.pem
+
+# Personal files
+*.pdf
+email-template.txt
+faculty-urls.csv
+generated_emails.json
+professor-info/
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+
+# Mac / system files
+.DS_Store
+Thumbs.db
