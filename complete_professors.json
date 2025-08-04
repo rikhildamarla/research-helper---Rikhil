@@ -1,0 +1,16 @@
+{
+  "source_url": "https://mfe.haas.berkeley.edu/academics/faculty-profiles",
+  "total_professors": 0,
+  "scraped_at": "2025-08-04 00:19:12",
+  "settings": {
+    "faculty_limit": 5,
+    "request_delay": 2,
+    "scholar_request_delay": 3
+  },
+  "data_sources": {
+    "basic_info": "Direct email extraction from faculty page",
+    "research_papers": "Google Scholar API (SerpAPI)",
+    "research_summary": "AI-generated from papers"
+  },
+  "professors": []
+}
